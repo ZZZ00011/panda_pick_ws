@@ -13,6 +13,7 @@ from moveit_configs_utils import MoveItConfigsBuilder
 
 TASK_ARGUMENTS = {
     "object_pose": (6, "Pick cylinder base [x,y,z,rx,ry,rz] in world (m, rad)"),
+    "object_dimensions": (2, "Cylinder [height,radius] (m), both positive"),
 }
 
 
@@ -43,6 +44,8 @@ def launch_task(context):
         argument = LaunchConfiguration(name).perform(context)
         if argument:
             overrides[name] = parse_array(name, argument, size)
+    if "object_dimensions" in overrides and min(overrides["object_dimensions"]) <= 0:
+        raise ValueError("object_dimensions height and radius must be positive")
 
     return [
         Node(

@@ -1,17 +1,46 @@
+#include <panda_pick_demo/pick_place_task.h>
 #include <panda_pick_demo/task_manager.h>
 
-int main(int argc, char** argv) {
-	using panda_pick_demo::TaskManager;
-	using panda_pick_demo::TaskResult;
+namespace {
+using panda_pick_demo::TaskManager;
+using panda_pick_demo::TaskResult;
 
+TaskResult pick(const rclcpp::Node::SharedPtr& node, pick_place_task_demo::Params params, uint64_t id,
+                const TaskManager::Point& target, const TaskManager::ReportProgress& report) {
+	params.object_pose[0] = target.x;
+	params.object_pose[1] = target.y;
+	params.object_pose[2] = target.z;
+	try {
+		if (!panda_pick_demo::setupTargetScene(node, params))
+			return {false, "object_still_attached"};
+	} catch (const std::exception& error) {
+		RCLCPP_ERROR(node->get_logger(), "Scene update failed for task %llu: %s",
+		             static_cast<unsigned long long>(id), error.what());
+		return {false, "scene_update_failed"};
+	}
+
+	report("PLANNING", "started");
+	panda_pick_demo::PickPlaceTask task("pick_place_task_" + std::to_string(id));
+	if (!task.init(node, params))
+		return {false, "task_initialization_failed"};
+	const auto plan = task.plan(params.max_solutions);
+	if (!plan)
+		return {false, "planning_failed", plan.val};
+	return {false, "execution_not_connected"};
+}
+}  // namespace
+
+int main(int argc, char** argv) {
 	rclcpp::init(argc, argv);
 	int exit_code = 0;
 	try {
 		rclcpp::NodeOptions options;
 		options.automatically_declare_parameters_from_overrides(true);
 		auto node = rclcpp::Node::make_shared("panda_pick_node", options);
-		TaskManager manager(*node, [](uint64_t, const TaskManager::Point&, const TaskManager::ReportProgress&) {
-			return TaskResult{false, "backend_not_connected"};
+		const pick_place_task_demo::ParamListener listener(node);
+		const auto params = listener.get_params();
+		TaskManager manager(*node, [node, params](uint64_t id, const auto& target, const auto& report) {
+			return pick(node, params, id, target, report);
 		});
 		rclcpp::spin(node);
 	} catch (const std::exception& error) {

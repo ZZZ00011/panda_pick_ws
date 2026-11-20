@@ -65,6 +65,7 @@ using namespace moveit::task_constructor;
 
 // prepare a demo environment from ROS parameters under node
 void setupDemoScene(const rclcpp::Node::SharedPtr& node, const pick_place_task_demo::Params& params);
+bool setupTargetScene(const rclcpp::Node::SharedPtr& node, const pick_place_task_demo::Params& params);
 
 class PickPlaceTask
 {
@@ -74,7 +75,7 @@ public:
 
 	bool init(const rclcpp::Node::SharedPtr& node, const pick_place_task_demo::Params& params);
 
-	bool plan(const std::size_t max_solutions);
+	moveit::core::MoveItErrorCode plan(std::size_t max_solutions);
 
 	bool execute();
 

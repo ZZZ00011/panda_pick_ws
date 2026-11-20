@@ -43,8 +43,10 @@
 #include <Eigen/Geometry>
 #include <panda_pick_demo/pick_place_task.h>
 #include <geometry_msgs/msg/pose.hpp>
+#include <moveit/collision_detection/collision_matrix.h>
 #include <moveit/utils/moveit_error_code.h>
 #include <moveit_msgs/srv/apply_planning_scene.hpp>
+#include <moveit_msgs/srv/get_planning_scene.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 
 static const rclcpp::Logger LOGGER = rclcpp::get_logger("panda_pick_demo");
@@ -66,9 +68,6 @@ void requirePositiveDimensions(const std::vector<double>& dimensions, const char
 	    }))
 		throw std::invalid_argument(std::string(parameter_name) + " must contain finite positive dimensions");
 }
-}  // namespace
-
-namespace panda_pick_demo {
 
 moveit_msgs::msg::CollisionObject createTable(const pick_place_task_demo::Params& params) {
 	requirePositiveDimensions(params.table_dimensions, "table_dimensions");
@@ -85,12 +84,13 @@ moveit_msgs::msg::CollisionObject createTable(const pick_place_task_demo::Params
 	return object;
 }
 
-moveit_msgs::msg::CollisionObject createObject(const pick_place_task_demo::Params& params) {
+moveit_msgs::msg::CollisionObject createObject(const pick_place_task_demo::Params& params,
+                                               const std::string& reference_frame) {
 	requirePositiveDimensions(params.object_dimensions, "object_dimensions");
 	geometry_msgs::msg::Pose pose = vectorToPose(params.object_pose);
 	moveit_msgs::msg::CollisionObject object;
 	object.id = params.object_name;
-	object.header.frame_id = params.object_reference_frame;
+	object.header.frame_id = reference_frame;
 	object.primitives.resize(1);
 	object.primitives[0].type = shape_msgs::msg::SolidPrimitive::CYLINDER;
 	object.primitives[0].dimensions = { params.object_dimensions.at(0), params.object_dimensions.at(1) };
@@ -99,34 +99,83 @@ moveit_msgs::msg::CollisionObject createObject(const pick_place_task_demo::Param
 	return object;
 }
 
-void setupDemoScene(const rclcpp::Node::SharedPtr& node, const pick_place_task_demo::Params& params) {
-	using namespace std::chrono_literals;
-	using ApplyPlanningScene = moveit_msgs::srv::ApplyPlanningScene;
-	auto request = std::make_shared<ApplyPlanningScene::Request>();
-	request->scene.is_diff = true;
-	request->scene.robot_state.is_diff = true;
-	auto& objects = request->scene.world.collision_objects;
+moveit_msgs::msg::PlanningScene makeDemoScene(const pick_place_task_demo::Params& params,
+                                             const std::string& pick_frame) {
+	moveit_msgs::msg::PlanningScene scene;
+	scene.is_diff = true;
+	scene.robot_state.is_diff = true;
+	auto& objects = scene.world.collision_objects;
 	if (params.spawn_table)
 		objects.push_back(createTable(params));
-	objects.push_back(createObject(params));
+	objects.push_back(createObject(params, pick_frame));
+	return scene;
+}
 
-	auto client = node->create_client<ApplyPlanningScene>("apply_planning_scene");
+template <class Service>
+typename Service::Response::SharedPtr callSceneService(
+    const rclcpp::Node::SharedPtr& node, const char* name,
+    const typename Service::Request::SharedPtr& request) {
+	using namespace std::chrono_literals;
+	auto client = node->create_client<Service>(name);
 	if (!client->wait_for_service(5s))
-		throw std::runtime_error("Planning scene service unavailable. Start demo.launch.py first.");
+		throw std::runtime_error(std::string("Planning scene service unavailable: ") + name);
 
-	// Retrying the same ADDs replaces objects with the same IDs.
+	// Scene reads and replacement ADDs can both be retried.
 	for (int attempt = 0; attempt < 2 && rclcpp::ok(); ++attempt) {
 		auto result = client->async_send_request(request);
-		if (result.wait_for(3s) == std::future_status::ready) {
-			if (!result.get()->success)
-				throw std::runtime_error("MoveIt rejected the demo planning scene");
-			return;
-		}
+		if (result.wait_for(3s) == std::future_status::ready)
+			return result.get();
 		client->remove_pending_request(result);
 		if (attempt == 0 && rclcpp::ok())
-			RCLCPP_WARN(LOGGER, "No response from apply_planning_scene, retrying scene setup");
+			RCLCPP_WARN(LOGGER, "No response from %s, retrying", name);
 	}
-	throw std::runtime_error("Timed out waiting for apply_planning_scene response");
+	throw std::runtime_error(std::string("Timed out waiting for ") + name + " response");
+}
+
+moveit_msgs::msg::PlanningScene readScene(const rclcpp::Node::SharedPtr& node, uint32_t components) {
+	using Service = moveit_msgs::srv::GetPlanningScene;
+	auto request = std::make_shared<Service::Request>();
+	request->components.components = components;
+	return callSceneService<Service>(node, "get_planning_scene", request)->scene;
+}
+
+void applyScene(const rclcpp::Node::SharedPtr& node, moveit_msgs::msg::PlanningScene scene) {
+	using Service = moveit_msgs::srv::ApplyPlanningScene;
+	auto request = std::make_shared<Service::Request>();
+	request->scene = std::move(scene);
+	if (!callSceneService<Service>(node, "apply_planning_scene", request)->success)
+		throw std::runtime_error("MoveIt rejected the demo planning scene");
+}
+
+bool isAttached(const moveit_msgs::msg::PlanningScene& scene, const std::string& id) {
+	const auto& objects = scene.robot_state.attached_collision_objects;
+	return std::any_of(objects.begin(), objects.end(), [&id](const auto& object) {
+		return object.object.id == id;
+	});
+}
+}  // namespace
+
+namespace panda_pick_demo {
+
+void setupDemoScene(const rclcpp::Node::SharedPtr& node, const pick_place_task_demo::Params& params) {
+	applyScene(node, makeDemoScene(params, params.object_reference_frame));
+}
+
+bool setupTargetScene(const rclcpp::Node::SharedPtr& node, const pick_place_task_demo::Params& params) {
+	using Components = moveit_msgs::msg::PlanningSceneComponents;
+	const auto current = readScene(node, Components::ROBOT_STATE_ATTACHED_OBJECTS |
+	                                     Components::ALLOWED_COLLISION_MATRIX);
+	if (isAttached(current, params.object_name))
+		return false;
+
+	auto scene = makeDemoScene(params, "panda_link0");
+	// A failed execution can leave the task's object collision permissions in the scene.
+	collision_detection::AllowedCollisionMatrix collisions(current.allowed_collision_matrix);
+	collisions.setEntry(params.object_name, false);
+	collisions.setDefaultEntry(params.object_name, false);
+	collisions.getMessage(scene.allowed_collision_matrix);
+	applyScene(node, std::move(scene));
+	return true;
 }
 
 PickPlaceTask::PickPlaceTask(const std::string& task_name) : task_name_(task_name) {}
@@ -488,17 +537,17 @@ bool PickPlaceTask::init(const rclcpp::Node::SharedPtr& node, const pick_place_t
 	return true;
 }
 
-bool PickPlaceTask::plan(const std::size_t max_solutions) {
+moveit::core::MoveItErrorCode PickPlaceTask::plan(std::size_t max_solutions) {
 	RCLCPP_INFO(LOGGER, "Start searching for task solutions");
 
 	const auto result = task_->plan(max_solutions);
 	if (!result) {
 		RCLCPP_ERROR(LOGGER, "Planning failed (MoveIt result: %s, %d)",
 		             moveit::core::error_code_to_string(result).c_str(), result.val);
-		return false;
+		return result;
 	}
 	RCLCPP_INFO(LOGGER, "Planning succeeded with %zu complete solution(s)", task_->numSolutions());
-	return true;
+	return result;
 }
 
 bool PickPlaceTask::execute() {

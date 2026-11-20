@@ -19,10 +19,10 @@ find_package(tf2_eigen REQUIRED)
 
 generate_parameter_library(pick_place_demo_parameters src/pick_place_demo_parameters.yaml)
 
-add_executable(pick_place_demo src/pick_place_demo.cpp src/pick_place_task.cpp)
-target_include_directories(pick_place_demo PRIVATE include)
-target_link_libraries(pick_place_demo pick_place_demo_parameters)
-ament_target_dependencies(pick_place_demo
+add_library(panda_pick_task STATIC src/pick_place_task.cpp)
+target_include_directories(panda_pick_task PUBLIC include)
+target_link_libraries(panda_pick_task PUBLIC pick_place_demo_parameters)
+ament_target_dependencies(panda_pick_task PUBLIC
   geometry_msgs
   moveit_core
   moveit_msgs
@@ -33,8 +33,11 @@ ament_target_dependencies(pick_place_demo
   tf2_eigen
 )
 
+add_executable(pick_place_demo src/pick_place_demo.cpp)
+target_link_libraries(pick_place_demo PRIVATE panda_pick_task)
+
 add_executable(pick_place_node src/pick_place_node.cpp src/task_manager.cpp)
-target_include_directories(pick_place_node PRIVATE include)
+target_link_libraries(pick_place_node panda_pick_task)
 ament_target_dependencies(pick_place_node geometry_msgs rclcpp std_msgs)
 
 install(TARGETS pick_place_demo pick_place_node DESTINATION lib/${PROJECT_NAME})

@@ -14,6 +14,7 @@ from moveit_configs_utils import MoveItConfigsBuilder
 TASK_ARGUMENTS = {
     "object_pose": (6, "Pick cylinder base [x,y,z,rx,ry,rz] in world (m, rad)"),
     "object_dimensions": (2, "Cylinder [height,radius] (m), both positive"),
+    "place_pose": (6, "Place cylinder base [x,y,z,rx,ry,rz] in world (m, rad)"),
 }
 
 

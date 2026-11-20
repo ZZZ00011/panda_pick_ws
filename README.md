@@ -1,6 +1,6 @@
 # Panda Pick Demo
 
-适用于 Ubuntu 22.04 和 ROS 2 Humble。包名为 `panda_pick_demo`，工作空间为 `~/panda_pick_ws`。
+适用于 Ubuntu 22.04 和 ROS 2 Humble。包名为 `panda_pick_demo`，工作空间为 `~/panda_pick_ws`。动态模式接收 ROS 2 坐标指令，用 Panda 假硬件自动执行抓放，并发布任务状态。固定点 Demo 仍可独立启动。
 
 ## 官方示例与本包
 
@@ -24,14 +24,90 @@
 cd ~/panda_pick_ws
 source /opt/ros/humble/setup.bash
 rosdep check --from-paths src --ignore-src --rosdistro humble
-CMAKE_BUILD_PARALLEL_LEVEL=2 colcon build --packages-select panda_pick_demo \
+CMAKE_BUILD_PARALLEL_LEVEL=2 colcon build --symlink-install --packages-select panda_pick_demo \
   --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
 ```
 
 如果 `rosdep check` 报缺少依赖，可在已初始化 rosdep 的环境中用 `rosdep install --from-paths src --ignore-src --rosdistro humble -y` 安装包清单中的依赖。
 
-## 启动
+## 动态模式启动
+
+先在各终端加载相同的环境。下面的 ROS 域用于隔离本次假硬件演示。
+
+```bash
+cd ~/panda_pick_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+export ROS_LOCALHOST_ONLY=1 ROS_DOMAIN_ID=83
+```
+
+终端 1 启动 MoveGroup、Panda 模拟控制器、RViz 和动态任务节点。无图形会话时加 `rviz:=false`。
+
+```bash
+ros2 launch panda_pick_demo panda_pick.launch.py
+```
+
+等日志显示 `You can start planning now!`，并确认 `joint_state_broadcaster`、`panda_arm_controller` 和 `panda_hand_controller` 已激活。在终端 2 订阅状态，在终端 3 发送一条目标。
+
+```bash
+# 终端 2
+ros2 topic echo /pick_status --qos-durability transient_local
+
+# 终端 3
+ros2 topic pub --once /pick_target geometry_msgs/msg/Point '{x: 0.50, y: -0.25, z: 0.00}'
+```
+
+节点自动规划并执行。如果已经单独运行了本包的 `demo.launch.py`，用 `panda_pick.launch.py bringup:=false` 只启动动态节点。动态演示期间由该节点向同一个 MoveGroup 提交任务，固定点 `run.launch.py` 和 RViz 的 **Exec** 用于独立的演示。
+
+### 目标坐标与状态
+
+- `/pick_target` 的类型为 `geometry_msgs/msg/Point`，单位为米。点表示圆柱底面中心，参考帧为 `panda_link0`。随包启动的静态 TF 将它与 `world` 对齐。置放点继续使用 [panda_config.yaml](src/panda_pick_demo/config/panda_config.yaml) 中的 `place_pose`。
+- [task_params.yaml](src/panda_pick_demo/config/task_params.yaml) 给出包含边界的输入范围，默认 x 为 `[0.20, 0.80]`，y 为 `[-0.55, 0.55]`，z 为 `[0.00, 0.40]`。节点拒绝 NaN、Inf 和超出范围的坐标。可达性和碰撞仍由 MoveIt 判定。范围过滤只是坐标输入校验。
+- `/pick_status` 的类型为 `std_msgs/msg/String`。启动时发布 `id=0 state=IDLE detail=waiting_for_target`。每条收到的指令在本次进程内有一个递增编号，拒绝的指令也有独立编号。成功链路为 `ACCEPTED → PLANNING → EXECUTING → SUCCEEDED`。`FAILED` 或 `REJECTED` 同样是该编号的终态。使用支持历史消息的订阅查看最近状态。
+- `SUCCEEDED detail=task_completed moveit_code=1` 表示 MTC 执行得到了 MoveIt 的成功结果，且再次查询场景确认该圆柱已分离并存在于世界场景。任务完成后继续接收下一条指令，本轮的终态保留在状态话题。
+- 规划和执行在一个工作线程中串行完成，ROS executor 继续处理输入和服务响应。忙碌时来的有效指令收到 `REJECTED detail=robot_busy`，没有等待队列。每轮用相同碰撞 ID 替换圆柱的位置，重新读取当前场景和机器人状态，再构造新的 MTC Task。
+- 每轮开始时重置演示物体相关的碰撞许可。若上一轮故障后 `object` 仍附着，下一条有效指令返回 `FAILED detail=object_still_attached`，保留当前附着状态。可重新启动整套假硬件和动态节点，恢复初始场景后再提交。规划失败、执行失败和场景查询失败都会释放任务槽。
+
+### 动态模式验收
+
+用同一个 ROS 域和动态节点，依次发送下表坐标。下一个测试通常等上一条终态，D 的第二条指令在第一条报告 `EXECUTING` 后立刻发送。
+
+| 测试 | 输入或操作 | 本机实测 |
+| --- | --- | --- |
+| A 正常抓取 | `{x: 0.50, y: -0.25, z: 0.00}` | 一条 `ros2 topic pub --once` 触发完整执行，MoveIt 返回 `1`。 |
+| B 动态变化 | `{x: 0.47, y: -0.22, z: 0.00}` | 同一个节点将圆柱移到新抓取点，再次规划并执行成功。 |
+| C 非法坐标 | `{x: 2.0, y: 0.0, z: 0.10}` | `REJECTED detail=target_out_of_bounds`。 |
+| D 忙碌 | 发送 A，进入 `EXECUTING` 后发送 B | B 收到 `REJECTED detail=robot_busy`，A 正常完成。 |
+| E 规划失败 | `{x: 0.80, y: 0.55, z: 0.40}`，失败后再发送 B | 前者报告 `FAILED detail=planning_failed moveit_code=-1`，没有下发执行。后者完整执行成功。 |
+
+四次成功执行都记录到了关节运动和返回 `ready`。每次执行结束后，MoveIt 场景中的圆柱已分离，几何中心约为 `(0.55, -0.10, 0.1251)` m。可用以下命令查看关节状态和场景。
+
+```bash
+ros2 topic echo /joint_states --field position
+ros2 service call /get_planning_scene moveit_msgs/srv/GetPlanningScene \
+  '{components: {components: 20}}'
+```
+
+A–E 的状态、场景与关节采样记录在 `log/dynamic/04-acceptance/status.log`，完整 MoveGroup 和任务节点日志在同目录的 `bringup.log`。通信阶段还分别实测了 NaN、Inf 和后端未接入状态，记录在 `log/dynamic/02-interface/status.log`。
+
+附加回归记录在 `log/dynamic/05-recovery/status.log`。停用假机械臂控制器后，MoveGroup 拒绝轨迹，MTC 返回 `99999`，任务报告 `execution_failed`。重新激活后下一条指令成功。向模拟场景注入残留附着后，节点报告 `object_still_attached`，场景保持附着。清除测试附着后，下一条指令成功。固定点入口也在新代码下通过执行复测，日志位于 `log/dynamic/06-fixed-entry-regression/`。
+
+已验证范围为 MoveIt 的 Planning Scene 和 ros2_control 假硬件，RViz 图形交互和物理抓取未实测。退出时仍可复现系统安装的 MoveIt 2.5.10 `move_group` 的析构段错误。验收结果均在退出前从真实执行结果和场景查询中确认。
+
+### 动态模式文件
+
+| 路径（相对于 `src/panda_pick_demo/`） | 用途 |
+| --- | --- |
+| `src/task_manager.cpp`、`include/panda_pick_demo/task_manager.h` | 订阅目标、校验坐标、管理编号和忙碌状态，并发布任务结果。 |
+| `src/pick_place_node.cpp` | 将目标交给场景和 MTC，调用规划与执行，核对最终释放状态。 |
+| `src/pick_place_task.cpp`、`include/panda_pick_demo/pick_place_task.h` | 复用固定点抓放阶段，更新和检查规划场景，返回实际 MoveIt 结果码。 |
+| `src/pick_place_demo.cpp` | 保留固定点入口，适配共享执行接口的返回类型。 |
+| `launch/panda_pick.launch.py` | 加载机器人配置和动态节点，可同时启动原有 Panda 模拟环境。 |
+| `config/task_params.yaml` | 动态目标范围。几何、尺寸、桌面和放置点使用已有 `config/panda_config.yaml`。 |
+| `CMakeLists.txt`、`package.xml` | 构建共享任务代码和两个节点，声明状态话题依赖。 |
+
+## 固定点模式启动
 
 两个终端都加载同一套工作空间环境，用独立 ROS 域隔离本次演示。
 
@@ -82,7 +158,7 @@ ros2 launch panda_pick_demo run.launch.py \
 
 竖直圆柱的可复现用例中，`rx` 和 `ry` 均为零。沿用官方代码，几何高度偏移沿参考系的 Z 轴计算。更改默认值、桌面尺寸或参考帧可编辑 [panda_config.yaml](src/panda_pick_demo/config/panda_config.yaml)，重新运行 colcon 并启动节点。显式 Launch 参数覆盖对应默认值，任务在启动时读取一次。
 
-## 测试清单
+## 固定点模式测试清单
 
 每项在新启动的假硬件环境中运行。运行参数、状态码和实际场景可用下面的命令检查。查询中的 `20` 同时请求世界物体几何和附着物体。在任务启动或执行结束后，用同一 ROS 域中的第三个终端查询。
 

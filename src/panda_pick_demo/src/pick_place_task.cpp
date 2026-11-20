@@ -43,6 +43,7 @@
 #include <Eigen/Geometry>
 #include <panda_pick_demo/pick_place_task.h>
 #include <geometry_msgs/msg/pose.hpp>
+#include <moveit/utils/moveit_error_code.h>
 #include <moveit_msgs/srv/apply_planning_scene.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 
@@ -141,6 +142,9 @@ bool PickPlaceTask::init(const rclcpp::Node::SharedPtr& node, const pick_place_t
 	// Individual movement stages are collected within the Task object
 	Task& t = *task_;
 	t.stages()->setName(task_name_);
+	if (!std::isfinite(params.planning_timeout))
+		throw std::invalid_argument("planning_timeout must be finite");
+	t.setTimeout(params.planning_timeout);
 	t.loadRobotModel(node);
 
 	/* Create planners used in various stages. Various options are available,
@@ -487,8 +491,12 @@ bool PickPlaceTask::init(const rclcpp::Node::SharedPtr& node, const pick_place_t
 bool PickPlaceTask::plan(const std::size_t max_solutions) {
 	RCLCPP_INFO(LOGGER, "Start searching for task solutions");
 
-	if (!task_->plan(max_solutions))
+	const auto result = task_->plan(max_solutions);
+	if (!result) {
+		RCLCPP_ERROR(LOGGER, "Planning failed (MoveIt result: %s, %d)",
+		             moveit::core::error_code_to_string(result).c_str(), result.val);
 		return false;
+	}
 	RCLCPP_INFO(LOGGER, "Planning succeeded with %zu complete solution(s)", task_->numSolutions());
 	return true;
 }

@@ -40,6 +40,11 @@ pick_place_task_demo:
   max_solutions:
     type: int
     default_value: 10
+  planning_timeout:
+    type: double
+    default_value: 20.0
+    validation:
+      gt<>: [0.0]
   arm_group_name:
     type: string
     validation:

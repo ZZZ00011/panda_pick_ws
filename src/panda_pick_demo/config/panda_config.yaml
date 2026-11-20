@@ -1,7 +1,8 @@
 /**:
   ros__parameters:
-    # Total planning attempts
+    # Maximum number of complete solutions and MTC search time in seconds
     max_solutions: 10
+    planning_timeout: 20.0
 
     # Planning group and link names
     arm_group_name: "panda_arm"

@@ -14,6 +14,7 @@ find_package(moveit_task_constructor_core REQUIRED)
 find_package(moveit_task_constructor_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(shape_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(tf2_eigen REQUIRED)
 
 generate_parameter_library(pick_place_demo_parameters src/pick_place_demo_parameters.yaml)
@@ -32,7 +33,11 @@ ament_target_dependencies(pick_place_demo
   tf2_eigen
 )
 
-install(TARGETS pick_place_demo DESTINATION lib/${PROJECT_NAME})
+add_executable(pick_place_node src/pick_place_node.cpp src/task_manager.cpp)
+target_include_directories(pick_place_node PRIVATE include)
+ament_target_dependencies(pick_place_node geometry_msgs rclcpp std_msgs)
+
+install(TARGETS pick_place_demo pick_place_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 install(FILES LICENSE DESTINATION share/${PROJECT_NAME})
 

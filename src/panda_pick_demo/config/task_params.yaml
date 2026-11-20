@@ -1,0 +1,5 @@
+panda_pick_node:
+  ros__parameters:
+    # Inclusive bounds for [x, y, z] of the cylinder base in panda_link0 (m).
+    target_min: [0.20, -0.55, 0.00]
+    target_max: [0.80, 0.55, 0.40]

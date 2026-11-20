@@ -34,9 +34,16 @@
   Desc:   A demo to show MoveIt Task Constructor in action
 */
 
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <future>
+#include <stdexcept>
+
 #include <Eigen/Geometry>
 #include <panda_pick_demo/pick_place_task.h>
 #include <geometry_msgs/msg/pose.hpp>
+#include <moveit_msgs/srv/apply_planning_scene.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 
 static const rclcpp::Logger LOGGER = rclcpp::get_logger("panda_pick_demo");
@@ -50,18 +57,20 @@ Eigen::Isometry3d vectorToEigen(const std::vector<double>& values) {
 }
 geometry_msgs::msg::Pose vectorToPose(const std::vector<double>& values) {
 	return tf2::toMsg(vectorToEigen(values));
-};
+}
+
+void requirePositiveDimensions(const std::vector<double>& dimensions, const char* parameter_name) {
+	if (std::any_of(dimensions.begin(), dimensions.end(), [](double value) {
+		    return !std::isfinite(value) || value <= 0.0;
+	    }))
+		throw std::invalid_argument(std::string(parameter_name) + " must contain finite positive dimensions");
+}
 }  // namespace
 
 namespace panda_pick_demo {
 
-void spawnObject(moveit::planning_interface::PlanningSceneInterface& psi,
-                 const moveit_msgs::msg::CollisionObject& object) {
-	if (!psi.applyCollisionObject(object))
-		throw std::runtime_error("Failed to spawn object: " + object.id);
-}
-
 moveit_msgs::msg::CollisionObject createTable(const pick_place_task_demo::Params& params) {
+	requirePositiveDimensions(params.table_dimensions, "table_dimensions");
 	geometry_msgs::msg::Pose pose = vectorToPose(params.table_pose);
 	moveit_msgs::msg::CollisionObject object;
 	object.id = params.table_name;
@@ -76,6 +85,7 @@ moveit_msgs::msg::CollisionObject createTable(const pick_place_task_demo::Params
 }
 
 moveit_msgs::msg::CollisionObject createObject(const pick_place_task_demo::Params& params) {
+	requirePositiveDimensions(params.object_dimensions, "object_dimensions");
 	geometry_msgs::msg::Pose pose = vectorToPose(params.object_pose);
 	moveit_msgs::msg::CollisionObject object;
 	object.id = params.object_name;
@@ -88,13 +98,34 @@ moveit_msgs::msg::CollisionObject createObject(const pick_place_task_demo::Param
 	return object;
 }
 
-void setupDemoScene(const pick_place_task_demo::Params& params) {
-	// Add table and object to planning scene
-	rclcpp::sleep_for(std::chrono::microseconds(100));  // Wait for ApplyPlanningScene service
-	moveit::planning_interface::PlanningSceneInterface psi;
+void setupDemoScene(const rclcpp::Node::SharedPtr& node, const pick_place_task_demo::Params& params) {
+	using namespace std::chrono_literals;
+	using ApplyPlanningScene = moveit_msgs::srv::ApplyPlanningScene;
+	auto request = std::make_shared<ApplyPlanningScene::Request>();
+	request->scene.is_diff = true;
+	request->scene.robot_state.is_diff = true;
+	auto& objects = request->scene.world.collision_objects;
 	if (params.spawn_table)
-		spawnObject(psi, createTable(params));
-	spawnObject(psi, createObject(params));
+		objects.push_back(createTable(params));
+	objects.push_back(createObject(params));
+
+	auto client = node->create_client<ApplyPlanningScene>("apply_planning_scene");
+	if (!client->wait_for_service(5s))
+		throw std::runtime_error("Planning scene service unavailable. Start demo.launch.py first.");
+
+	// Retrying the same ADDs replaces objects with the same IDs.
+	for (int attempt = 0; attempt < 2 && rclcpp::ok(); ++attempt) {
+		auto result = client->async_send_request(request);
+		if (result.wait_for(3s) == std::future_status::ready) {
+			if (!result.get()->success)
+				throw std::runtime_error("MoveIt rejected the demo planning scene");
+			return;
+		}
+		client->remove_pending_request(result);
+		if (attempt == 0 && rclcpp::ok())
+			RCLCPP_WARN(LOGGER, "No response from apply_planning_scene, retrying scene setup");
+	}
+	throw std::runtime_error("Timed out waiting for apply_planning_scene response");
 }
 
 PickPlaceTask::PickPlaceTask(const std::string& task_name) : task_name_(task_name) {}

@@ -10,7 +10,6 @@ find_package(generate_parameter_library REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(moveit_core REQUIRED)
 find_package(moveit_msgs REQUIRED)
-find_package(moveit_ros_planning_interface REQUIRED)
 find_package(moveit_task_constructor_core REQUIRED)
 find_package(moveit_task_constructor_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -26,7 +25,6 @@ ament_target_dependencies(pick_place_demo
   geometry_msgs
   moveit_core
   moveit_msgs
-  moveit_ros_planning_interface
   moveit_task_constructor_core
   moveit_task_constructor_msgs
   rclcpp

@@ -40,7 +40,6 @@
 // MoveIt
 #include <moveit/planning_scene/planning_scene.h>
 #include <moveit/robot_model/robot_model.h>
-#include <moveit/planning_scene_interface/planning_scene_interface.h>
 
 // MTC
 #include <moveit/task_constructor/task.h>
@@ -65,7 +64,7 @@ namespace panda_pick_demo {
 using namespace moveit::task_constructor;
 
 // prepare a demo environment from ROS parameters under node
-void setupDemoScene(const pick_place_task_demo::Params& params);
+void setupDemoScene(const rclcpp::Node::SharedPtr& node, const pick_place_task_demo::Params& params);
 
 class PickPlaceTask
 {

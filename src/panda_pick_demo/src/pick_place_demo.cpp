@@ -49,7 +49,7 @@ namespace {
 bool runTask(const rclcpp::Node::SharedPtr& node, panda_pick_demo::PickPlaceTask& task) {
 	const pick_place_task_demo::ParamListener param_listener(node);
 	const auto params = param_listener.get_params();
-	panda_pick_demo::setupDemoScene(params);
+	panda_pick_demo::setupDemoScene(node, params);
 
 	if (!task.init(node, params))
 		return false;

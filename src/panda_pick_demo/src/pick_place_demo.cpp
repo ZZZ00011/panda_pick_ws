@@ -37,42 +37,53 @@
 // ROS
 #include <rclcpp/rclcpp.hpp>
 
+#include <exception>
+#include <thread>
+
 // MTC pick/place demo implementation
 #include <panda_pick_demo/pick_place_task.h>
 
 static const rclcpp::Logger LOGGER = rclcpp::get_logger("panda_pick_demo");
+
+namespace {
+bool runTask(const rclcpp::Node::SharedPtr& node, panda_pick_demo::PickPlaceTask& task) {
+	const pick_place_task_demo::ParamListener param_listener(node);
+	const auto params = param_listener.get_params();
+	panda_pick_demo::setupDemoScene(params);
+
+	if (!task.init(node, params))
+		return false;
+	if (!task.plan(params.max_solutions)) {
+		RCLCPP_ERROR(LOGGER, "Planning failed");
+		return false;
+	}
+	if (params.execute)
+		return task.execute();
+	RCLCPP_INFO(LOGGER, "Execution disabled");
+	return true;
+}
+}  // namespace
 
 int main(int argc, char** argv) {
 	rclcpp::init(argc, argv);
 	rclcpp::NodeOptions node_options;
 	node_options.automatically_declare_parameters_from_overrides(true);
 	auto node = rclcpp::Node::make_shared("panda_pick_demo", node_options);
-	std::thread spinning_thread([node] { rclcpp::spin(node); });
+	panda_pick_demo::PickPlaceTask task("pick_place_task");
+	rclcpp::executors::SingleThreadedExecutor executor;
+	executor.add_node(node);
+	std::thread spinning_thread([&executor] { executor.spin(); });
 
-	const auto param_listener = std::make_shared<pick_place_task_demo::ParamListener>(node);
-	const auto params = param_listener->get_params();
-	panda_pick_demo::setupDemoScene(params);
-
-	// Construct and run pick/place task
-	panda_pick_demo::PickPlaceTask pick_place_task("pick_place_task");
-	if (!pick_place_task.init(node, params)) {
-		RCLCPP_INFO(LOGGER, "Initialization failed");
-		return 1;
+	bool success = false;
+	try {
+		success = runTask(node, task);
+	} catch (const std::exception& error) {
+		RCLCPP_ERROR(LOGGER, "%s", error.what());
 	}
 
-	if (pick_place_task.plan(params.max_solutions)) {
-		RCLCPP_INFO(LOGGER, "Planning succeded");
-		if (params.execute) {
-			pick_place_task.execute();
-			RCLCPP_INFO(LOGGER, "Execution complete");
-		} else {
-			RCLCPP_INFO(LOGGER, "Execution disabled");
-		}
-	} else {
-		RCLCPP_INFO(LOGGER, "Planning failed");
-	}
-
-	// Keep introspection alive
+	// Keep successful solutions available to RViz until Ctrl+C.
+	if (!success)
+		rclcpp::shutdown();
 	spinning_thread.join();
-	return 0;
+	return success ? 0 : 1;
 }

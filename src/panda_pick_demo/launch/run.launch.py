@@ -19,6 +19,7 @@ ARRAY_ARGUMENTS = {
 }
 BOOLEAN_ARGUMENTS = {
     "spawn_table": "Add the demo table collision object to the planning scene",
+    "execute": "Send the first complete solution to MoveIt for execution",
 }
 
 

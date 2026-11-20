@@ -456,7 +456,10 @@ bool PickPlaceTask::init(const rclcpp::Node::SharedPtr& node, const pick_place_t
 bool PickPlaceTask::plan(const std::size_t max_solutions) {
 	RCLCPP_INFO(LOGGER, "Start searching for task solutions");
 
-	return static_cast<bool>(task_->plan(max_solutions));
+	if (!task_->plan(max_solutions))
+		return false;
+	RCLCPP_INFO(LOGGER, "Planning succeeded with %zu complete solution(s)", task_->numSolutions());
+	return true;
 }
 
 bool PickPlaceTask::execute() {
@@ -470,6 +473,7 @@ bool PickPlaceTask::execute() {
 		return false;
 	}
 
+	RCLCPP_INFO(LOGGER, "Execution complete (MoveIt result: %d)", execute_result.val);
 	return true;
 }
 }  // namespace panda_pick_demo

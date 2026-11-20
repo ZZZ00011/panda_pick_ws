@@ -56,7 +56,7 @@ bool runTask(const rclcpp::Node::SharedPtr& node, panda_pick_demo::PickPlaceTask
 	if (!task.plan(params.max_solutions))
 		return false;
 	if (params.execute)
-		return task.execute();
+		return static_cast<bool>(task.execute());
 	RCLCPP_INFO(LOGGER, "Execution disabled");
 	return true;
 }

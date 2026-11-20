@@ -178,6 +178,15 @@ bool setupTargetScene(const rclcpp::Node::SharedPtr& node, const pick_place_task
 	return true;
 }
 
+bool objectDetachedInWorld(const rclcpp::Node::SharedPtr& node, const std::string& object_id) {
+	using Components = moveit_msgs::msg::PlanningSceneComponents;
+	const auto scene = readScene(node, Components::ROBOT_STATE_ATTACHED_OBJECTS | Components::WORLD_OBJECT_NAMES);
+	const auto& objects = scene.world.collision_objects;
+	return !isAttached(scene, object_id) && std::any_of(objects.begin(), objects.end(), [&object_id](const auto& object) {
+		return object.id == object_id;
+	});
+}
+
 PickPlaceTask::PickPlaceTask(const std::string& task_name) : task_name_(task_name) {}
 
 bool PickPlaceTask::init(const rclcpp::Node::SharedPtr& node, const pick_place_task_demo::Params& params) {
@@ -550,18 +559,19 @@ moveit::core::MoveItErrorCode PickPlaceTask::plan(std::size_t max_solutions) {
 	return result;
 }
 
-bool PickPlaceTask::execute() {
+moveit::core::MoveItErrorCode PickPlaceTask::execute() {
+	if (!task_ || task_->solutions().empty())
+		return moveit::core::MoveItErrorCode::INVALID_MOTION_PLAN;
+
 	RCLCPP_INFO(LOGGER, "Executing solution trajectory");
-	moveit_msgs::msg::MoveItErrorCodes execute_result;
+	const auto execute_result = task_->execute(*task_->solutions().front());
 
-	execute_result = task_->execute(*task_->solutions().front());
-
-	if (execute_result.val != moveit_msgs::msg::MoveItErrorCodes::SUCCESS) {
+	if (!execute_result) {
 		RCLCPP_ERROR_STREAM(LOGGER, "Task execution failed and returned: " << execute_result.val);
-		return false;
+		return execute_result;
 	}
 
 	RCLCPP_INFO(LOGGER, "Execution complete (MoveIt result: %d)", execute_result.val);
-	return true;
+	return execute_result;
 }
 }  // namespace panda_pick_demo

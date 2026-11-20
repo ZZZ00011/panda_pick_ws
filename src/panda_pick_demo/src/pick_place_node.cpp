@@ -26,7 +26,22 @@ TaskResult pick(const rclcpp::Node::SharedPtr& node, pick_place_task_demo::Param
 	const auto plan = task.plan(params.max_solutions);
 	if (!plan)
 		return {false, "planning_failed", plan.val};
-	return {false, "execution_not_connected"};
+	if (!rclcpp::ok())
+		return {false, "interrupted"};
+
+	report("EXECUTING", "started");
+	const auto execution = task.execute();
+	if (!execution)
+		return {false, "execution_failed", execution.val};
+	try {
+		if (!panda_pick_demo::objectDetachedInWorld(node, params.object_name))
+			return {false, "object_release_unconfirmed", execution.val};
+	} catch (const std::exception& error) {
+		RCLCPP_ERROR(node->get_logger(), "Release verification failed for task %llu: %s",
+		             static_cast<unsigned long long>(id), error.what());
+		return {false, "scene_verification_failed", execution.val};
+	}
+	return {true, "task_completed", execution.val};
 }
 }  // namespace
 

@@ -8,13 +8,17 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from moveit_configs_utils import MoveItConfigsBuilder
 
 
-TASK_ARGUMENTS = {
+ARRAY_ARGUMENTS = {
     "object_pose": (6, "Pick cylinder base [x,y,z,rx,ry,rz] in world (m, rad)"),
     "object_dimensions": (2, "Cylinder [height,radius] (m), both positive"),
     "place_pose": (6, "Place cylinder base [x,y,z,rx,ry,rz] in world (m, rad)"),
+}
+BOOLEAN_ARGUMENTS = {
+    "spawn_table": "Add the demo table collision object to the planning scene",
 }
 
 
@@ -41,12 +45,16 @@ def launch_task(context):
     )
     config = Path(get_package_share_directory("panda_pick_demo")) / "config" / "panda_config.yaml"
     overrides = {}
-    for name, (size, _) in TASK_ARGUMENTS.items():
+    for name, (size, _) in ARRAY_ARGUMENTS.items():
         argument = LaunchConfiguration(name).perform(context)
         if argument:
             overrides[name] = parse_array(name, argument, size)
     if "object_dimensions" in overrides and min(overrides["object_dimensions"]) <= 0:
         raise ValueError("object_dimensions height and radius must be positive")
+    for name in BOOLEAN_ARGUMENTS:
+        argument = LaunchConfiguration(name)
+        if argument.perform(context):
+            overrides[name] = ParameterValue(argument, value_type=bool)
 
     return [
         Node(
@@ -67,10 +75,10 @@ def launch_task(context):
 
 
 def generate_launch_description():
-    return LaunchDescription([
-        *(
-            DeclareLaunchArgument(name, default_value="", description=f"{description}. Empty uses panda_config.yaml.")
-            for name, (_, description) in TASK_ARGUMENTS.items()
-        ),
-        OpaqueFunction(function=launch_task),
-    ])
+    descriptions = {name: description for name, (_, description) in ARRAY_ARGUMENTS.items()}
+    descriptions.update(BOOLEAN_ARGUMENTS)
+    arguments = [
+        DeclareLaunchArgument(name, default_value="", description=f"{description}. Empty uses panda_config.yaml.")
+        for name, description in descriptions.items()
+    ]
+    return LaunchDescription([*arguments, OpaqueFunction(function=launch_task)])
